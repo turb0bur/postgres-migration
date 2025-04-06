@@ -36,6 +36,13 @@ function initialize_variables() {
 function setup_ssm_port_forwarding() {
     echo "Setting up SSM port forwarding from localhost:$LOCAL_PORT to RDS..."
     
+    echo "==== SSM Connection Parameters ===="
+    echo "Bastion Host ID: $BASTION_ID"
+    echo "RDS Endpoint: $RDS_ENDPOINT"
+    echo "RDS Port: $RDS_PORT"
+    echo "Local Port: $LOCAL_PORT"
+    echo "=================================="
+    
     aws ssm start-session \
         --target "$BASTION_ID" \
         --document-name AWS-StartPortForwardingSessionToRemoteHost \
@@ -45,9 +52,8 @@ function setup_ssm_port_forwarding() {
     echo "SSM port forwarding started with PID: $SSM_PID"
     
     echo "Waiting for port forwarding to establish (10 seconds)..."
-    sleep 10  # Give the port forwarding more time to establish
+    sleep 5
     
-    # Test the connection
     echo "Testing database connection..."
     PGPASSWORD="$RDS_PASSWORD" psql -h localhost -p $LOCAL_PORT -U "$RDS_USERNAME" -d "$RDS_DB_NAME" -c "SELECT 1" > /dev/null 2>&1
     
@@ -69,7 +75,6 @@ function cleanup_resources() {
     fi
     
     rm -f temp_dump.sql 2>/dev/null || true
-    echo "Temporary files removed."
 }
 
 function migrate_from_docker_container() {
@@ -77,7 +82,6 @@ function migrate_from_docker_container() {
     local db_name="$2"
     local db_user="$3"
     
-    # Check if container exists and is running
     echo "Checking if container $container_name exists and is running..."
     if ! docker ps | grep -q "$container_name"; then
         echo "Error: Container $container_name is not running or does not exist."
@@ -95,10 +99,8 @@ function migrate_from_docker_container() {
     fi
     
     echo "Restoring dump to RDS database: $db_name..."
-    # First create the database if it doesn't exist
-    PGPASSWORD="$RDS_PASSWORD" psql -h localhost -p $LOCAL_PORT -U "$RDS_USERNAME" -d "$RDS_DB_NAME" -c "CREATE DATABASE \"$db_name\" WITH OWNER = \"$RDS_USERNAME\";" 2>/dev/null
+    PGPASSWORD="$RDS_PASSWORD" psql -h localhost -p $LOCAL_PORT -U "$RDS_USERNAME" -d postgres -c "CREATE DATABASE \"$db_name\" WITH OWNER = \"$RDS_USERNAME\";" 2>/dev/null
     
-    # Now restore to the source database name
     PGPASSWORD="$RDS_PASSWORD" psql -h localhost -p $LOCAL_PORT -U "$RDS_USERNAME" -d "$db_name" < temp_dump.sql
     
     if [ $? -ne 0 ]; then
@@ -107,6 +109,7 @@ function migrate_from_docker_container() {
     fi
     
     echo "Migration from Docker container completed successfully."
+    echo "Created database: $db_name"
     return 0
 }
 
@@ -129,10 +132,8 @@ function migrate_from_s3() {
     fi
     
     echo "Restoring dump to RDS database: $db_name..."
-    # First create the database if it doesn't exist
-    PGPASSWORD="$RDS_PASSWORD" psql -h localhost -p $LOCAL_PORT -U "$RDS_USERNAME" -d "$RDS_DB_NAME" -c "CREATE DATABASE \"$db_name\" WITH OWNER = \"$RDS_USERNAME\";" 2>/dev/null
+    PGPASSWORD="$RDS_PASSWORD" psql -h localhost -p $LOCAL_PORT -U "$RDS_USERNAME" -d postgres -c "CREATE DATABASE \"$db_name\" WITH OWNER = \"$RDS_USERNAME\";" 2>/dev/null
     
-    # Now restore to the specified database name
     PGPASSWORD="$RDS_PASSWORD" psql -h localhost -p $LOCAL_PORT -U "$RDS_USERNAME" -d "$db_name" < temp_dump.sql
     
     if [ $? -ne 0 ]; then
@@ -141,6 +142,7 @@ function migrate_from_s3() {
     fi
     
     echo "Migration from S3 completed successfully."
+    echo "Created database: $db_name"
     return 0
 }
 
@@ -159,7 +161,7 @@ function migrate_from_local_file() {
     fi
     
     echo "Restoring from local file: $file_path to database: $db_name..."
-    PGPASSWORD="$RDS_PASSWORD" psql -h localhost -p $LOCAL_PORT -U "$RDS_USERNAME" -d "$RDS_DB_NAME" -c "CREATE DATABASE \"$db_name\" WITH OWNER = \"$RDS_USERNAME\";" 2>/dev/null
+    PGPASSWORD="$RDS_PASSWORD" psql -h localhost -p $LOCAL_PORT -U "$RDS_USERNAME" -d postgres -c "CREATE DATABASE \"$db_name\" WITH OWNER = \"$RDS_USERNAME\";" 2>/dev/null
     
     PGPASSWORD="$RDS_PASSWORD" psql -h localhost -p $LOCAL_PORT -U "$RDS_USERNAME" -d "$db_name" < "$file_path"
     
@@ -169,6 +171,7 @@ function migrate_from_local_file() {
     fi
     
     echo "Migration from local file completed successfully."
+    echo "Created database: $db_name"
     return 0
 }
 
@@ -180,6 +183,8 @@ function display_menu() {
     echo "0) Exit"
     
     read -p "Enter your choice: " choice
+    
+    MIGRATED_DB_NAME=""
     
     case $choice in
         1)
@@ -193,6 +198,8 @@ function display_menu() {
             db_user=${db_user:-postgres}
             
             migrate_from_docker_container "$container_name" "$db_name" "$db_user"
+            migration_result=$?
+            MIGRATED_DB_NAME="$db_name"
             ;;
         2)
             read -p "Enter S3 bucket name: " s3_bucket
@@ -200,12 +207,16 @@ function display_menu() {
             read -p "Enter destination database name: " db_name
             
             migrate_from_s3 "$s3_bucket" "$s3_key" "$db_name"
+            migration_result=$?
+            MIGRATED_DB_NAME="$db_name"
             ;;
         3)
             read -p "Enter path to local dump file: " file_path
             read -p "Enter destination database name: " db_name
             
             migrate_from_local_file "$file_path" "$db_name"
+            migration_result=$?
+            MIGRATED_DB_NAME="$db_name"
             ;;
         0)
             echo "Exiting..."
@@ -216,20 +227,25 @@ function display_menu() {
             display_menu
             ;;
     esac
+    
+    return $migration_result
 }
 
 function display_completion_message() {
+    local db_name="$1"
+    
+    if [ -z "$db_name" ]; then
+        db_name="$RDS_DB_NAME"
+    fi
+    
     echo "========================================================"
     echo "Migration completed!"
     echo ""
     echo "Your database is now available at:"
     echo "Endpoint: $RDS_ENDPOINT"
     echo "Port: $RDS_PORT"
-    echo "Database: $RDS_DB_NAME"
+    echo "Database: $db_name"
     echo "Username: $RDS_USERNAME"
-    echo ""
-    echo "For larger datasets, consider using AWS DMS (Database Migration Service)"
-    echo "for a more robust migration process."
     echo "========================================================"
 }
 
@@ -241,21 +257,21 @@ function check_dependencies() {
     fi
 }
 
-# Main execution
-trap cleanup_resources EXIT
+function main() {
+    trap cleanup_resources EXIT
 
-check_dependencies
-initialize_variables
-setup_ssm_port_forwarding
+    check_dependencies
+    initialize_variables
+    setup_ssm_port_forwarding
 
-# Store the migration result
-migration_result=0
-display_menu
-migration_result=$?
+    display_menu
+    migration_result=$?
 
-# Only display completion message if migration was successful
-if [ $migration_result -eq 0 ]; then
-    display_completion_message
-else
-    echo "Migration failed. Please check the errors above and try again."
-fi 
+    if [ $migration_result -eq 0 ]; then
+        display_completion_message "$MIGRATED_DB_NAME"
+    else
+        echo "Migration failed. Please check the errors above and try again."
+    fi
+}
+
+main "$@" 
