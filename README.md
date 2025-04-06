@@ -57,15 +57,15 @@ Available sample databases:
    docker-compose up -d
    ```
 
-2. Create and load a sample database (e.g., Pagila):
+2. Create and load a sample database (e.g., Lego):
    ```bash
-   docker exec postgres-sample psql -U ${POSTGRES_USER} -c "CREATE DATABASE lego"
-   docker exec -i postgres-sample psql -U ${POSTGRES_USER} -d lego < samples/lego.sql
+   docker exec postgres-sample psql -U postgres -c "CREATE DATABASE lego"
+   docker exec -i postgres-sample psql -U postgres -d lego < samples/lego.sql
    ```
 
 3. Connect to the database:
    ```bash
-   docker exec -it postgres-sample psql -U ${POSTGRES_USER} -d lego
+   docker exec -it postgres-sample psql -U postgres -d lego
    ```
 
 You can similarly load other sample databases from the `samples` directory by adjusting the commands above.
