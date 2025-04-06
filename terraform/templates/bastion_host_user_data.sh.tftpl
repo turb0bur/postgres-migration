@@ -12,6 +12,7 @@ function disable_ssh() {
 }
 
 function install_postgres_client() {
+    sudo amazon-linux-extras enable postgresql14
     sudo yum install -y postgresql
 }
 
