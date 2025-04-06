@@ -1,0 +1,24 @@
+#!/bin/bash
+
+function run_ssm_agent() {
+    systemctl enable amazon-ssm-agent
+    systemctl start amazon-ssm-agent
+}
+
+function disable_ssh() {
+    sed -i 's/#PasswordAuthentication yes/PasswordAuthentication no/g' /etc/ssh/sshd_config
+    systemctl stop sshd
+    systemctl disable sshd
+}
+
+function install_postgres_client() {
+    sudo yum install -y postgresql
+}
+
+function main() {
+    run_ssm_agent
+    disable_ssh
+    install_postgres_client
+}
+
+main
